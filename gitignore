@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Environments
+.env
+.venv/
+venv/
+env/
+
+# Data (too large for git)
+data/raw/
+data/processed/
+data/synthetic/
+*.csv
+*.parquet
+*.pkl
+*.pt
+*.pth
+
+# Notebooks output
+.ipynb_checkpoints/
+
+# Logs + runs
+wandb/
+*.log
+runs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+*.key
+secrets.yaml
