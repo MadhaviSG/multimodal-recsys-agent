@@ -18,8 +18,14 @@ Outputs:
 
 import argparse
 import json
+import sys
+import os
 import time
 from pathlib import Path
+
+# Ensure repo root is on path — fixes circular import on Kaggle
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+os.chdir(Path(__file__).resolve().parent.parent)
 
 import numpy as np
 import pandas as pd
@@ -104,30 +110,42 @@ class InteractionPairDataset(Dataset):
     """
     Samples positive (user, item) pairs from the sparse interaction matrix.
 
-    Design decision: batch by (user, item) pairs, not by user rows.
-    Mult-VAE needed full user interaction vectors — one row per sample.
-    Two-tower needs individual positive interactions — one pair per sample.
-    In-batch negatives are constructed implicitly in the loss function.
+    Design decision: sample-based dataset over full pair extraction.
+    Extracting all 20M pairs upfront into tensors consumes ~300MB RAM
+    and causes DataLoader to hang on Kaggle during shuffle.
+    Instead: keep sparse matrix, sample random users per __getitem__,
+    pick a random positive item for each user. Equivalent training signal,
+    much lower memory pressure and no shuffle hang.
 
     Design decision: in-batch negatives.
-    For a batch of B pairs, each user's positive item is correct.
-    All other B-1 items in the batch serve as negatives for that user.
-    This gives B² training signals from B pairs — efficient and scalable.
-    Larger batch size = more negatives = stronger contrastive signal.
-    This is why two-tower models benefit from large batches (512-2048).
+    For a batch of B pairs, each user positive item is correct.
+    All other B-1 items serve as negatives. B^2 training signals per batch.
     """
-    def __init__(self, sparse_matrix: sp.csr_matrix):
-        # Extract all (user_idx, item_idx) positive pairs
-        cx = sparse_matrix.tocoo()
-        self.user_ids = torch.tensor(cx.row, dtype=torch.long)
-        self.item_ids = torch.tensor(cx.col, dtype=torch.long)
-        print(f"InteractionPairDataset: {len(self.user_ids):,} positive pairs")
+    def __init__(self, sparse_matrix: sp.csr_matrix, n_samples: int = None):
+        self.matrix = sparse_matrix
+        self.n_users = sparse_matrix.shape[0]
+        self.n_samples = n_samples or min(sparse_matrix.nnz, 2_000_000)
+        # Cache non-zero item indices per user for fast sampling
+        print("Building user-item index...")
+        cx = sparse_matrix.tocsr()
+        self.user_items = {}
+        for u in range(self.n_users):
+            items = cx[u].indices
+            if len(items) > 0:
+                self.user_items[u] = items
+        self.valid_users = np.array(list(self.user_items.keys()))
+        print(f"InteractionPairDataset: {self.n_samples:,} samples/epoch, "
+              f"{len(self.valid_users):,} active users")
 
     def __len__(self):
-        return len(self.user_ids)
+        return self.n_samples
 
     def __getitem__(self, idx: int):
-        return self.user_ids[idx], self.item_ids[idx]
+        # Sample random user, then random positive item for that user
+        u = int(self.valid_users[idx % len(self.valid_users)])
+        items = self.user_items[u]
+        item = int(items[np.random.randint(len(items))])
+        return torch.tensor(u, dtype=torch.long), torch.tensor(item, dtype=torch.long)
 
 
 # ── Validation ────────────────────────────────────────────────────────────────
