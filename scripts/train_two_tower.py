@@ -313,18 +313,23 @@ def train(config: dict):
             loss = model.in_batch_loss(user_ids, item_ids, batch_item_features)
             loss.backward()
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             epoch_loss += loss.item()
             global_step += 1
 
-            if global_step % 100 == 0 and config["training"]["log_wandb"]:
-                wandb.log({
-                    "train/loss": loss.item(),
-                    "train/lr": scheduler.get_last_lr()[0],
-                    "train/step": global_step,
-                })
+            # Log grad norm every 100 steps — zero grad norm = no learning
+            if global_step % 100 == 0:
+                if config["training"]["log_wandb"]:
+                    wandb.log({
+                        "train/loss": loss.item(),
+                        "train/lr": scheduler.get_last_lr()[0],
+                        "train/grad_norm": grad_norm.item(),
+                        "train/step": global_step,
+                    })
+                if global_step <= 300:  # print first 3 log steps
+                    print(f"  [step {global_step}] loss={loss.item():.4f} grad_norm={grad_norm.item():.4f}")
 
         scheduler.step()
         avg_loss = epoch_loss / len(loader)
