@@ -184,8 +184,8 @@ def evaluate(
     batch_size = 512
     for i in range(0, n_items, batch_size):
         batch = item_features[i:i + batch_size].to(device)
-        batch_ids = torch.arange(i, i + len(batch), dtype=torch.long).to(device)
-        emb = model.item_tower(batch_ids, batch)
+        batch_ids = torch.arange(i, min(i + 512, n_items), dtype=torch.long).to(device)
+        emb = model.get_item_embedding(batch_ids, batch)
         all_item_embs.append(emb.cpu())
     all_item_embs = torch.cat(all_item_embs, dim=0)  # (n_items, D)
 
@@ -193,8 +193,7 @@ def evaluate(
     user_ids_tensor = torch.tensor(val_user_indices, dtype=torch.long).to(device)
 
     # Embed all val users in one batch
-    user_embs = model.user_tower(user_ids_tensor).cpu()  # (n_val, D)
-    # note: item embeddings pre-computed above
+    user_embs = model.get_user_embedding(user_ids_tensor).cpu()  # (n_val, D)
 
     # Score: (n_val, n_items) dot product
     scores = torch.matmul(user_embs, all_item_embs.T).numpy()  # (n_val, n_items)
@@ -383,7 +382,7 @@ def train(config: dict):
         for i in range(0, n_items, 512):
             batch = item_features[i:i + 512].to(device)
             batch_ids = torch.arange(i, min(i+512, n_items), dtype=torch.long).to(device)
-            emb = model.item_tower(batch_ids, batch)
+            emb = model.get_item_embedding(batch_ids, batch)
             all_item_embs.append(emb.cpu().numpy())
     item_embeddings = np.concatenate(all_item_embs, axis=0)  # (n_items, embed_dim)
     np.save(out_dir / "item_embeddings.npy", item_embeddings)
