@@ -108,46 +108,44 @@ def build_item_features(
 
 class BPRDataset(Dataset):
     """
-    BPR (Bayesian Personalized Ranking) dataset.
-    Each sample: (user, positive_item, negative_item)
-    Negative item is sampled uniformly from items NOT in user history.
-
-    Design decision: BPR over InfoNCE for initial training.
-    InfoNCE with in-batch negatives requires careful temperature tuning
-    and can have false negative issues. BPR explicitly samples one
-    hard negative per positive — simpler, more stable, well-proven for CF.
-
-    Reference: Rendle et al., BPR (2009)
+    BPR dataset with numpy-based sampling throughout.
+    No Python sets, no list() conversion in __getitem__.
+    All sampling via numpy arrays for speed and correctness.
     """
     def __init__(self, sparse_matrix: sp.csr_matrix, n_samples: int = None):
         self.n_items = sparse_matrix.shape[1]
         self.n_samples = n_samples or min(sparse_matrix.nnz, 2_000_000)
         print("Building user-item index...")
         cx = sparse_matrix.tocsr()
-        self.user_items = {}
+        # Store as numpy arrays — fast indexing, no set/list conversion
+        self.user_pos_items = {}   # u -> np.array of positive item indices
+        self.user_pos_sets = {}    # u -> set for O(1) negative sampling check
         for u in range(sparse_matrix.shape[0]):
             items = cx[u].indices
             if len(items) > 0:
-                self.user_items[u] = set(items.tolist())
-        self.valid_users = np.array(list(self.user_items.keys()))
+                self.user_pos_items[u] = items.copy()
+                self.user_pos_sets[u] = set(items.tolist())
+        self.valid_users = np.array(list(self.user_pos_items.keys()))
+        self.n_valid = len(self.valid_users)
         print(f"BPRDataset: {self.n_samples:,} samples/epoch, "
-              f"{len(self.valid_users):,} active users")
+              f"{self.n_valid:,} active users")
 
     def __len__(self):
         return self.n_samples
 
     def __getitem__(self, idx: int):
-        # Sample user
-        u = int(self.valid_users[np.random.randint(len(self.valid_users))])
-        pos_items = self.user_items[u]
-        # Sample positive item
-        pos = int(np.random.choice(list(pos_items)))
-        # Sample negative item (not in user history)
+        # Sample random user via numpy (fast)
+        u = int(self.valid_users[np.random.randint(self.n_valid)])
+        # Sample positive item from numpy array (fast)
+        pos_arr = self.user_pos_items[u]
+        pos = int(pos_arr[np.random.randint(len(pos_arr))])
+        # Sample negative — uniform random, retry if positive
+        pos_set = self.user_pos_sets[u]
         neg = np.random.randint(self.n_items)
-        while neg in pos_items:
+        while neg in pos_set:
             neg = np.random.randint(self.n_items)
         return (
-            torch.tensor(u, dtype=torch.long),
+            torch.tensor(u,   dtype=torch.long),
             torch.tensor(pos, dtype=torch.long),
             torch.tensor(neg, dtype=torch.long),
         )
@@ -288,13 +286,10 @@ def train(config: dict):
         weight_decay=config["two_tower"]["weight_decay"],
     )
 
-    # LR scheduler — cosine decay
-    # Design decision: cosine LR decay (vs step decay).
-    # Smooth decay avoids sudden loss spikes. Standard for contrastive training.
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=config["two_tower"]["n_epochs"],
-    )
+    # No LR scheduler for BPR — constant lr.
+    # Cosine annealing decays lr to 0 by final epoch, killing learning.
+    # Constant lr lets the model keep learning throughout all 30 epochs.
+    scheduler = None
 
     best_recall = 0.0
     global_step = 0
@@ -326,17 +321,17 @@ def train(config: dict):
                 if config["training"]["log_wandb"]:
                     wandb.log({
                         "train/loss": loss.item(),
-                        "train/lr": scheduler.get_last_lr()[0],
+                        "train/lr": optimizer.param_groups[0]["lr"],
                         "train/grad_norm": grad_norm.item(),
                         "train/step": global_step,
                     })
                 if global_step <= 500:
                     print(f"  [step {global_step}] loss={loss.item():.4f} grad_norm={grad_norm.item():.4f}")
 
-        scheduler.step()
         avg_loss = epoch_loss / len(loader)
+        current_lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch:3d} | loss={avg_loss:.4f} | "
-              f"lr={scheduler.get_last_lr()[0]:.2e} | {time.time()-t0:.1f}s")
+              f"lr={current_lr:.2e} | {time.time()-t0:.1f}s")
 
         # Validation
         if epoch % config["training"]["eval_every"] == 0:
