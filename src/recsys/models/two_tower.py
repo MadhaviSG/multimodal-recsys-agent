@@ -20,6 +20,7 @@ class UserTower(nn.Module):
     def __init__(self, num_users: int, embed_dim: int = 128, output_dim: int = 64):
         super().__init__()
         self.user_embed = nn.Embedding(num_users, embed_dim)
+        nn.init.normal_(self.user_embed.weight, mean=0.0, std=0.01)
         self.mlp = nn.Sequential(
             nn.Linear(embed_dim, 256),
             nn.ReLU(),
@@ -44,7 +45,9 @@ class ItemTower(nn.Module):
 
         # Learned item embedding — captures item-specific signal
         # beyond genre/year content features
+        # Small init std prevents negative cosine similarities at random init
         self.item_embed = nn.Embedding(num_items, embed_dim)
+        nn.init.normal_(self.item_embed.weight, mean=0.0, std=0.01)
 
         # Content feature MLP
         self.feature_mlp = nn.Sequential(
