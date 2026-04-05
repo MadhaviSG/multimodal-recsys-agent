@@ -141,8 +141,8 @@ class InteractionPairDataset(Dataset):
         return self.n_samples
 
     def __getitem__(self, idx: int):
-        # Sample random user, then random positive item for that user
-        u = int(self.valid_users[idx % len(self.valid_users)])
+        # True random sampling — not cyclic modulo
+        u = int(self.valid_users[np.random.randint(len(self.valid_users))])
         items = self.user_items[u]
         item = int(items[np.random.randint(len(items))])
         return torch.tensor(u, dtype=torch.long), torch.tensor(item, dtype=torch.long)
