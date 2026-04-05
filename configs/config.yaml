@@ -10,7 +10,7 @@ training:
   checkpoint_dir: checkpoints
   n_epochs: 50
   batch_size: 512
-  lr: 1e-3
+  lr: 0.001
   weight_decay: 0.01
   eval_every: 5               # run val every N epochs
   n_val_users: 1000           # fixed val panel — not all 162K
