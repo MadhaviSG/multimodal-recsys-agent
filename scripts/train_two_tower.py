@@ -184,7 +184,8 @@ def evaluate(
     batch_size = 512
     for i in range(0, n_items, batch_size):
         batch = item_features[i:i + batch_size].to(device)
-        emb = model.item_tower(batch)
+        batch_ids = torch.arange(i, i + len(batch), dtype=torch.long).to(device)
+        emb = model.item_tower(batch_ids, batch)
         all_item_embs.append(emb.cpu())
     all_item_embs = torch.cat(all_item_embs, dim=0)  # (n_items, D)
 
@@ -193,6 +194,7 @@ def evaluate(
 
     # Embed all val users in one batch
     user_embs = model.user_tower(user_ids_tensor).cpu()  # (n_val, D)
+    # note: item embeddings pre-computed above
 
     # Score: (n_val, n_items) dot product
     scores = torch.matmul(user_embs, all_item_embs.T).numpy()  # (n_val, n_items)
@@ -270,6 +272,7 @@ def train(config: dict):
     # Model
     model = TwoTowerModel(
         num_users=n_users,
+        num_items=n_items,
         item_feature_dim=item_feature_dim,
         embed_dim=config["two_tower"]["embed_dim"],
     ).to(device)
@@ -307,7 +310,7 @@ def train(config: dict):
             batch_item_features = item_features[item_ids]  # (B, feature_dim)
 
             optimizer.zero_grad()
-            loss = model.in_batch_loss(user_ids, batch_item_features)
+            loss = model.in_batch_loss(user_ids, item_ids, batch_item_features)
             loss.backward()
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -349,6 +352,7 @@ def train(config: dict):
                     "config": config,
                     "n_users": n_users,
                     "n_items": n_items,
+                    "num_items": n_items,
                     "item_feature_dim": item_feature_dim,
                 }, out_dir / "two_tower_best.pt")
                 print(f"  ✓ New best checkpoint (Recall@{k}={best_recall:.4f})")
@@ -372,8 +376,9 @@ def train(config: dict):
     all_item_embs = []
     with torch.no_grad():
         for i in range(0, n_items, 512):
-            batch = item_features[i:i + 512]
-            emb = model.item_tower(batch)
+            batch = item_features[i:i + 512].to(device)
+            batch_ids = torch.arange(i, min(i+512, n_items), dtype=torch.long).to(device)
+            emb = model.item_tower(batch_ids, batch)
             all_item_embs.append(emb.cpu().numpy())
     item_embeddings = np.concatenate(all_item_embs, axis=0)  # (n_items, embed_dim)
     np.save(out_dir / "item_embeddings.npy", item_embeddings)
