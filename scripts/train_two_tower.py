@@ -106,46 +106,51 @@ def build_item_features(
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
 
-class InteractionPairDataset(Dataset):
+class BPRDataset(Dataset):
     """
-    Samples positive (user, item) pairs from the sparse interaction matrix.
+    BPR (Bayesian Personalized Ranking) dataset.
+    Each sample: (user, positive_item, negative_item)
+    Negative item is sampled uniformly from items NOT in user history.
 
-    Design decision: sample-based dataset over full pair extraction.
-    Extracting all 20M pairs upfront into tensors consumes ~300MB RAM
-    and causes DataLoader to hang on Kaggle during shuffle.
-    Instead: keep sparse matrix, sample random users per __getitem__,
-    pick a random positive item for each user. Equivalent training signal,
-    much lower memory pressure and no shuffle hang.
+    Design decision: BPR over InfoNCE for initial training.
+    InfoNCE with in-batch negatives requires careful temperature tuning
+    and can have false negative issues. BPR explicitly samples one
+    hard negative per positive — simpler, more stable, well-proven for CF.
 
-    Design decision: in-batch negatives.
-    For a batch of B pairs, each user positive item is correct.
-    All other B-1 items serve as negatives. B^2 training signals per batch.
+    Reference: Rendle et al., BPR (2009)
     """
     def __init__(self, sparse_matrix: sp.csr_matrix, n_samples: int = None):
-        self.matrix = sparse_matrix
-        self.n_users = sparse_matrix.shape[0]
+        self.n_items = sparse_matrix.shape[1]
         self.n_samples = n_samples or min(sparse_matrix.nnz, 2_000_000)
-        # Cache non-zero item indices per user for fast sampling
         print("Building user-item index...")
         cx = sparse_matrix.tocsr()
         self.user_items = {}
-        for u in range(self.n_users):
+        for u in range(sparse_matrix.shape[0]):
             items = cx[u].indices
             if len(items) > 0:
-                self.user_items[u] = items
+                self.user_items[u] = set(items.tolist())
         self.valid_users = np.array(list(self.user_items.keys()))
-        print(f"InteractionPairDataset: {self.n_samples:,} samples/epoch, "
+        print(f"BPRDataset: {self.n_samples:,} samples/epoch, "
               f"{len(self.valid_users):,} active users")
 
     def __len__(self):
         return self.n_samples
 
     def __getitem__(self, idx: int):
-        # True random sampling — not cyclic modulo
+        # Sample user
         u = int(self.valid_users[np.random.randint(len(self.valid_users))])
-        items = self.user_items[u]
-        item = int(items[np.random.randint(len(items))])
-        return torch.tensor(u, dtype=torch.long), torch.tensor(item, dtype=torch.long)
+        pos_items = self.user_items[u]
+        # Sample positive item
+        pos = int(np.random.choice(list(pos_items)))
+        # Sample negative item (not in user history)
+        neg = np.random.randint(self.n_items)
+        while neg in pos_items:
+            neg = np.random.randint(self.n_items)
+        return (
+            torch.tensor(u, dtype=torch.long),
+            torch.tensor(pos, dtype=torch.long),
+            torch.tensor(neg, dtype=torch.long),
+        )
 
 
 # ── Validation ────────────────────────────────────────────────────────────────
@@ -259,7 +264,7 @@ def train(config: dict):
     # Design decision: large batch size for in-batch negatives.
     # 512 pairs → 511 negatives per user. 1024 → 1023 negatives.
     # Memory cost: 2 * batch_size * embed_dim * 4 bytes (negligible).
-    dataset = InteractionPairDataset(train_matrix)
+    dataset = BPRDataset(train_matrix)
     loader = DataLoader(
         dataset,
         batch_size=config["two_tower"]["batch_size"],
@@ -301,15 +306,13 @@ def train(config: dict):
         epoch_loss = 0.0
         t0 = time.time()
 
-        for user_ids, item_ids in loader:
+        for user_ids, pos_ids, neg_ids in loader:
             user_ids = user_ids.to(device)
-            item_ids = item_ids.to(device)
-
-            # Get item features for this batch
-            batch_item_features = item_features[item_ids]  # (B, feature_dim)
+            pos_ids  = pos_ids.to(device)
+            neg_ids  = neg_ids.to(device)
 
             optimizer.zero_grad()
-            loss = model.in_batch_loss(user_ids, item_ids, batch_item_features)
+            loss = model.bpr_loss(user_ids, pos_ids, neg_ids)
             loss.backward()
 
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -327,7 +330,7 @@ def train(config: dict):
                         "train/grad_norm": grad_norm.item(),
                         "train/step": global_step,
                     })
-                if global_step <= 300:  # print first 3 log steps
+                if global_step <= 500:
                     print(f"  [step {global_step}] loss={loss.item():.4f} grad_norm={grad_norm.item():.4f}")
 
         scheduler.step()
