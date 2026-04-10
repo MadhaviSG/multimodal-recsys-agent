@@ -40,7 +40,7 @@ training:
 two_tower:
   batch_size: 512
   embed_dim: 64
-  lr: 0.01
+  lr: 0.001
   n_epochs: 30
-  n_samples: 200000
-  weight_decay: 0.01
+  n_samples: 275000
+  weight_decay: 0.0001

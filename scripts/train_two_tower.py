@@ -290,10 +290,12 @@ def train(config: dict):
         weight_decay=config["two_tower"]["weight_decay"],
     )
 
-    # No LR scheduler for BPR — constant lr.
-    # Cosine annealing decays lr to 0 by final epoch, killing learning.
-    # Constant lr lets the model keep learning throughout all 30 epochs.
-    scheduler = None
+    # ReduceLROnPlateau on val Recall@K — halves lr if no improvement for
+    # 2 consecutive eval checks (2 × eval_every epochs). Does NOT decay to
+    # zero like cosine annealing; only fires when validation stalls.
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", patience=2, factor=0.5, min_lr=1e-5,
+    )
 
     best_recall = 0.0
     global_step = 0
@@ -344,6 +346,7 @@ def train(config: dict):
                 item_features, val_user_indices, k, device,
             )
             print(f"  → Val Recall@{k}={metrics['recall']:.4f}")
+            scheduler.step(metrics["recall"])
 
             if config["training"]["log_wandb"]:
                 wandb.log({"val/recall": metrics["recall"], "epoch": epoch})
