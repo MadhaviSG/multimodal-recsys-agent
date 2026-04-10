@@ -112,9 +112,9 @@ class BPRDataset(Dataset):
     No Python sets, no list() conversion in __getitem__.
     All sampling via numpy arrays for speed and correctness.
     """
-    def __init__(self, sparse_matrix: sp.csr_matrix, n_samples: int = None):
+    def __init__(self, sparse_matrix: sp.csr_matrix, n_samples: int):
         self.n_items = sparse_matrix.shape[1]
-        self.n_samples = n_samples or min(sparse_matrix.nnz, 2_000_000)
+        self.n_samples = n_samples
         print("Building user-item index...")
         cx = sparse_matrix.tocsr()
         # Store as numpy arrays — fast indexing, no set/list conversion
@@ -262,7 +262,11 @@ def train(config: dict):
     # Design decision: large batch size for in-batch negatives.
     # 512 pairs → 511 negatives per user. 1024 → 1023 negatives.
     # Memory cost: 2 * batch_size * embed_dim * 4 bytes (negligible).
-    dataset = BPRDataset(train_matrix)
+    n_samples = config["two_tower"]["n_samples"]
+    print(f"[CONFIG] n_samples={n_samples:,}  lr={config['two_tower']['lr']}  "
+          f"embed_dim={config['two_tower']['embed_dim']}  "
+          f"batch_size={config['two_tower']['batch_size']}")
+    dataset = BPRDataset(train_matrix, n_samples=n_samples)
     loader = DataLoader(
         dataset,
         batch_size=config["two_tower"]["batch_size"],

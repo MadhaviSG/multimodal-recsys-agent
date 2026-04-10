@@ -42,4 +42,5 @@ two_tower:
   embed_dim: 64
   lr: 0.01
   n_epochs: 30
+  n_samples: 200000
   weight_decay: 0.01
