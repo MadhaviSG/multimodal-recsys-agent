@@ -38,7 +38,7 @@ training:
   val_path: data/processed/val.npz
   weight_decay: 0.01
 two_tower:
-  batch_size: 512
+  batch_size: 256
   embed_dim: 64
   lr: 0.001
   n_epochs: 30
